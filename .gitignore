@@ -1,0 +1,12 @@
+# Local config — contains your Public Client ID
+.env
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Logs & OS files
+*.log
+.DS_Store
+
+.claude
