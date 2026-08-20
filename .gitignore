@@ -10,3 +10,6 @@ npm-debug.log*
 .DS_Store
 
 .claude
+
+# Article drafts / generated assets — not part of the sample
+article/

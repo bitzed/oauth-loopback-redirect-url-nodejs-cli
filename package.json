@@ -3,17 +3,11 @@
   "version": "1.0.0",
   "description": "Minimal Zoom OAuth loopback redirect URI + PKCE PoC — Node.js CLI, zero dependencies",
   "type": "module",
-  "main": "main.js",
-  "bin": {
-    "zoom-oauth-loopback": "main.js"
-  },
   "scripts": {
-    "start": "node main.js",
-    "fixed": "node main.js --port 3000",
-    "help": "node main.js --help"
+    "start": "node main.js"
   },
   "engines": {
-    "node": ">=18.3.0"
+    "node": ">=20.12.0"
   },
   "license": "MIT",
   "private": true

@@ -21,9 +21,9 @@ function log(message) {
 }
 
 /** Show the shape of a secret without leaking it. */
-function redact(value, keep = 6) {
+function redact(value) {
   if (!value) return value;
-  return `${String(value).slice(0, keep)}…(${String(value).length} chars)`;
+  return `${String(value).slice(0, 6)}…(${String(value).length} chars)`;
 }
 
 // ── Step 1: PKCE (RFC 7636) ──────────────────────────────────────────────────
@@ -61,10 +61,9 @@ function startListener({ port }) {
 
     const server = createServer((req, res) => {
       const url = new URL(req.url, `http://${HOST}`);
-      const keys = [...url.searchParams.keys()];
-      log(`Incoming request: ${req.method} ${url.pathname}${keys.length ? `?${keys.join('&')}` : ''}`);
-
       const params = Object.fromEntries(url.searchParams);
+      const keys = Object.keys(params);
+      log(`Incoming request: ${req.method} ${url.pathname}${keys.length ? `?${keys.join('&')}` : ''}`);
       log(`Captured callback parameters${params.code ? ` · code=${redact(params.code)}` : ''}`);
 
       if (params.error) {
@@ -94,20 +93,26 @@ function startListener({ port }) {
       cb();
     };
 
-    const timer = setTimeout(() => {
-      finish(() => rejectCode(
-        new Error(`No redirect received within ${Math.round(TIMEOUT_MS / 1000)}s`)
-      ));
-    }, TIMEOUT_MS);
+    // The clock only starts once we are actually listening. If bind() fails the
+    // caller may retry on another port, and a stray timer from the dead attempt
+    // would later reject a `waitForCode` nobody is awaiting any more.
+    let timer;
 
-    server.on('error', (err) => rejectReady(err));
+    server.on('error', rejectReady);
 
     server.listen(port, HOST, () => {
       const actualPort = server.address().port;
       const redirectUri = `http://${HOST}:${actualPort}${CALLBACK_PATH}`;
       const kind = port === 0 ? 'ephemeral' : 'fixed';
       log(`Loopback listener bound to ${HOST}:${actualPort} (${kind} port) → ${redirectUri}`);
-      resolveReady({ server, redirectUri, waitForCode, port: actualPort });
+
+      timer = setTimeout(() => {
+        finish(() => rejectCode(
+          new Error(`No redirect received within ${Math.round(TIMEOUT_MS / 1000)}s`)
+        ));
+      }, TIMEOUT_MS);
+
+      resolveReady({ redirectUri, waitForCode });
     });
   });
 }
@@ -187,6 +192,10 @@ async function main() {
   if (existsSync(envFile)) process.loadEnvFile(envFile);
 
   const clientId = process.env.PUBLIC_CLIENT_ID;
+  if (!clientId) {
+    log('PUBLIC_CLIENT_ID is not set. Copy .env.example to .env and fill it in.');
+    return 1;
+  }
   const port = Number(process.env.LOOPBACK_PORT ?? 0) || 0;
 
   // ── 1. PKCE + state. Nothing has touched the network yet.
@@ -195,15 +204,24 @@ async function main() {
   log(`Generated PKCE + state (S256) · challenge=${challenge} · state=${state}`);
 
   // ── 2. Listener FIRST — the redirect URI cannot exist until the socket does.
+  //
+  // Zoom matches loopback redirect URIs while ignoring the port, so a busy
+  // fixed port is never fatal: fall back to an ephemeral one and carry on.
   let listener;
   try {
     listener = await startListener({ port });
   } catch (err) {
-    log(`Could not bind ${HOST}:${port} — ${err.message}`);
-    if (err.code === 'EADDRINUSE') {
-      log('That port is taken. Set LOOPBACK_PORT=0 for an ephemeral port, or pick a free one.');
+    if (err.code !== 'EADDRINUSE' || port === 0) {
+      log(`Could not bind ${HOST}:${port} — ${err.message}`);
+      return 1;
     }
-    return 1;
+    log(`${HOST}:${port} is already in use — retrying on an ephemeral port`);
+    try {
+      listener = await startListener({ port: 0 });
+    } catch (retryErr) {
+      log(`Could not bind ${HOST}:0 — ${retryErr.message}`);
+      return 1;
+    }
   }
   const { redirectUri, waitForCode } = listener;
 
